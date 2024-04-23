@@ -1,0 +1,221 @@
+``` server side
+
+#include "connection.h"
+int serverSocket;
+SocketAddress serverAddr, clientAddr;
+socklen_t addr_size, n;
+int i;
+char _message[SIZE];
+
+int main(int argc, char **argv)
+{
+    int aPort = IPPORT_RESERVED + getuid();
+
+    serverSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (serverSocket < 0)
+    {
+        perror("Socket creation failed!\n");
+        exit(BAD);
+    }
+    else
+    {
+        makeReceiverSA(&serverAddr, aPort);
+        
+    }
+    if (bind(serverSocket, (struct sockaddr *)&serverAddr, sizeof(SocketAddress)) != 0)
+    {
+        perror("Socket binding failed!\n");
+        close(serverSocket);
+        exit(BAD);
+    }
+    printSA(serverAddr);
+    addr_size = sizeof(clientAddr);
+    makeDestSA(&clientAddr, "127.0.0.1", aPort+1);
+    // clientAddr.sin_family = AF_INET;
+    while (strlen(_message) != 1 && _message[0] != 'q')
+    {
+        Message m, r;
+        char* art = "Message received!";
+        memcpy(r.data, art, strlen(art));
+        r.length = strlen(art);
+
+        if (anyThingThere(serverSocket) > 0)
+            if (GetRequest(&m, serverSocket, &clientAddr) == OK)
+            {
+                memcpy(_message, m.data, m.length);
+                printf("\nReceived Message: %s\n", m.data);
+                Status ret = SendReply(&r, serverSocket, clientAddr);
+            }
+    }
+}
+
+Status SendReply(Message *replyMessage, int s, SocketAddress clientSA)
+{
+    printSA(clientSA);
+    Status ret;
+    ret = UDPsend(s, replyMessage, clientSA);
+    return OK;
+}
+
+Status GetRequest(Message *callMessage, int s, SocketAddress *clientSA)
+{
+    Status ret = UDPreceive(s, callMessage, clientSA);
+
+    if (ret == BAD)
+        return BAD;
+    if (strlen(_message) > SIZE)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: BAD Message Length\n", WRONGLENGTH);
+        return WRONGLENGTH;
+    }
+    else
+        return OK;
+}
+
+Status UDPsend(int s, Message *m, SocketAddress dest)
+{
+    ssize_t n;
+    n = sendto(s, m->data, m->length, 0, (struct sockaddr *)&dest, sizeof(SocketAddress));
+    if (n < 0)
+    {
+        perror("Send Error:");
+        printf("\nError: \n\tCode: %d\n\tMessage: Unrecoverable error\n", BAD);
+        return BAD;
+    }
+    if (n != m->length)
+        return OK;
+}
+
+Status UDPreceive(int s, Message *m, SocketAddress *origin)
+{
+    ssize_t n;
+    socklen_t a = sizeof(SocketAddress);
+    n = recvfrom(s, _message, SIZE, 0, (struct sockaddr *)&origin, &a);
+
+    // printf("%ld\n", n);
+    // printf("%s\n", _message);
+    // memcpy(&m->data, _message, strlen(_message));
+    // printf("%s\n", m->data);
+    // m->length = strlen(_message);
+    if (n < 0)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: Unrecoverable error\n", BAD);
+        return BAD;
+    }
+    
+    if (strlen(_message) > SIZE)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: BAD Message Length\n", WRONGLENGTH);
+        return WRONGLENGTH;
+    }
+    return OK;
+}
+
+
+``` client side
+
+#include "connection.h"
+int clientSocket, z;
+SocketAddress serverAddr, clientAddr, rSA;
+socklen_t addr_size;
+char _message[SIZE], reply[SIZE];
+
+void main(int argc, char **argv)
+{
+    int aPort = IPPORT_RESERVED + getuid();
+    int rPort = IPPORT_RESERVED + getuid() + 1;
+
+    if (argc <= 1)
+    {
+        printf("\nUsage: client server_name ??\n example client 127.0.0.1\n");
+        printf("Use q to close the session.\n");
+        exit(BAD);
+    }
+
+    z = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    makeReceiverSA(&rSA, rPort);
+    clientSocket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (clientSocket < 0)
+    {
+        perror("Socket creation failed!");
+        exit(BAD);
+    }
+    else
+    {
+        makeLocalSA(&clientAddr);
+    }
+    bind(z, (struct sockaddr *)&rSA, sizeof(SocketAddress));
+    if (bind(clientSocket, (struct sockaddr *)&clientAddr, sizeof(SocketAddress)) != 0)
+    {
+        perror("Socket binding failed!");
+        close(clientSocket);
+        exit(BAD);
+    }
+    printSA(clientAddr);
+    makeDestSA(&serverAddr, argv[1], aPort);
+    makeReceiverSA(&rSA, rPort);
+    printSA(serverAddr);
+    while (strlen(_message) != 1 && _message[0] != 'q')
+    {
+        printf("\nEnter message to send: ");
+        fgets(_message, SIZE, stdin);
+        Message m, r;
+        memcpy(m.data, _message, strlen(_message));
+        m.length = strlen(_message);
+        r.length = SIZE;
+        if (DoOperation(&m, &r, clientSocket, serverAddr) == OK)
+        {
+            memcpy(r.data, reply, strlen(reply));
+            printf("\nResponse: %s\n", r.data);
+        }
+    }
+}
+
+Status DoOperation(Message *message, Message *reply, int s, SocketAddress serverSA)
+{
+    Status ret;
+    if (message->length > SIZE)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: BAD Message Length\n", WRONGLENGTH);
+        return WRONGLENGTH;
+    }
+    ret = UDPsend(s, message, serverSA);
+    if (ret == BAD)
+        return BAD;
+    ret = UDPreceive(z, reply, &rSA);
+    if (ret == BAD)
+        return BAD;
+    return OK;
+}
+
+Status UDPsend(int s, Message *m, SocketAddress dest)
+{
+    ssize_t n;
+    n = sendto(s, m->data, m->length, 0, (struct sockaddr *)&dest, sizeof(SocketAddress));
+    if (n < 0)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: Unrecoverable error\n", BAD);
+        return BAD;
+    }
+    if (n != m->length)
+        return OK;
+}
+
+Status UDPreceive(int s, Message *m, SocketAddress *origin)
+{
+    ssize_t n;
+    socklen_t a = sizeof(SocketAddress);
+    n = recvfrom(s, reply, SIZE, 0, (struct sockaddr *)&origin, &a);
+    if (n < 0)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: Unrecoverable error\n", BAD);
+        return BAD;
+    }
+
+    if (strlen(reply) > SIZE)
+    {
+        printf("\nError: \n\tCode: %d\n\tMessage: BAD Message Length\n", WRONGLENGTH);
+        return WRONGLENGTH;
+    }
+    return OK;
+}
